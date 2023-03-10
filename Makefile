@@ -4,7 +4,7 @@ cli:
 	gcc cli-client/main.c common/utils.c -o target/pm
 
 gui:
-	gcc -o target/pm-gui graphical-client/main.c common/utils.c graphical-client/themes.c `pkg-config --cflags --libs gtk4`
+	gcc -o target/pm-gui graphical-client/main.c common/utils.c common/map.c graphical-client/themes.c `pkg-config --cflags --libs gtk4`
 
 run:
 	target/pm-gui

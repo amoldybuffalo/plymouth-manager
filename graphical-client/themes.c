@@ -4,7 +4,15 @@
 #include <pthread.h>
 #include "main.h"
 #include "../common/utils.h"
+#include "../common/map.h"
 #include "themes.h"
+
+struct gtk_data_storage {
+  GtkWidget* widget;
+  char theme_name[PATH_MAX];
+};
+
+map_element* currently_animated;  
 
 /* This is all done asynchronously so that the information can be updated live.*/
 void* on_install_button_click_async(void* data) {
@@ -28,10 +36,10 @@ char* fancify_text(char* text) {
   int new_word = 1;
   for(int i = 0; i < strlen(text); i++) {
     if(new_word == 1 && text[i] >= 'a' && text[i] <= 'z') {
-      result[i] = text[i] - 32; //Work some ascii magic.
+      result[i] = text[i] - 32; //Work some ascii magic to capitalize the first letter of every word. 
       new_word = 0;
     } else if (text[i] == '_') {
-        result[i] = ' ';
+        result[i] = ' '; //Replace underscored with spaces
         new_word = 1;
     } else {
       result[i] = text[i];
@@ -40,24 +48,85 @@ char* fancify_text(char* text) {
   return result;
 }
 
+GdkPixbuf* get_pixbuf_standard_size(char* path) {
+  GdkPixbuf* pixbuf = gdk_pixbuf_new_from_file_at_scale(path, 300, 230, 0, NULL);
+  return pixbuf;
+}
 
 GtkWidget* get_optimal_theme_image(char* theme_name) {
   char path[PATH_MAX];
-  sprintf(path, "/usr/share/plymouth-manager/themes/%s/progress-2.png", theme_name);
-  GdkPixbuf* pixbuf = gdk_pixbuf_new_from_file_at_scale(path, 300, 230, 0, NULL);
+  sprintf(path, "/usr/share/plymouth-manager/themes/%s/progress-", theme_name);
+  int optimal_number = (find_highest_file_number(path, 0, ".png") / 4);
+  path[0] = '\0';
+  sprintf(path, "/usr/share/plymouth-manager/themes/%s/progress-%i.png", theme_name, optimal_number);
+  GdkPixbuf* pixbuf = get_pixbuf_standard_size(path);
   GtkWidget* image = gtk_image_new_from_pixbuf(pixbuf); 
   gtk_widget_set_size_request(image, 300, 300);
   return image;
 }
 
+void* animate_plymouth_theme_async(void* args) {
+  char path[PATH_MAX];
+
+  //Transmute the arguments back into the original struct form.
+  struct gtk_data_storage* data = (struct gtk_data_storage*) args;
+  char theme_name[1000];
+  strcpy(theme_name, data->theme_name);
+   
+  GtkWidget* image =  (GtkWidget*) data->widget;
+  
+  sprintf(path, "/usr/share/plymouth-manager/themes/%s/progress-", theme_name);
+  int highest_num = find_highest_file_number(path, 0, ".png");
+  for(int i = 0; i < highest_num; i++) {
+    
+    if(map_find(currently_animated, theme_name) == 1) {
+      sprintf(path, "/usr/share/plymouth-manager/themes/%s/progress-%i.png", theme_name, i);
+      g_print("Theme name is '%s'\n", theme_name);
+      g_print("Path is: %s\n", path);
+      
+      gtk_image_set_from_pixbuf( GTK_IMAGE(image), get_pixbuf_standard_size(path));
+
+    }  
+    sleep(0.5);
+  }
+  sprintf(path, "/usr/share/plymouth-manager/themes/%s/progress-%i.png", theme_name, highest_num/4);
+  gtk_image_set_from_pixbuf( GTK_IMAGE(image), get_pixbuf_standard_size(path));
+  map_modify(currently_animated, theme_name, 0);
+}
+
+static void on_image_mouseover(GtkEventController* controller, gpointer theme_name) {
+  struct gtk_data_storage data;
+  data.widget = gtk_event_controller_get_widget(controller);
+  strcpy(data.theme_name, (char*) theme_name);
+  void* args = (void*) &data;
+  pthread_t thread_id;
+
+  if(map_find(currently_animated, (char*) theme_name) == 0) {
+    map_modify(currently_animated, (char*) theme_name, 1);
+    pthread_create(&thread_id, NULL, animate_plymouth_theme_async, args);
+  
+  } 
+}
+
+static void on_image_mouseout(GtkEventController* controller, gpointer theme_name) {
+ map_modify(currently_animated, (char*) theme_name, 0);
+}
+
+
 
 GtkWidget* build_theme_frame(char* theme_name) {
+  map_add(currently_animated, theme_name, 0);
   GtkWidget* main_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
   GtkWidget* image = get_optimal_theme_image(theme_name);
-  GtkWidget* title = gtk_label_new(fancify_text(theme_name));
+  GtkWidget* title = gtk_label_new(theme_name);
   GtkWidget* apply_button = gtk_button_new_with_label("Use Theme");
+  
+  GtkEventController* controller = gtk_event_controller_motion_new();
+  gtk_widget_add_controller(image, controller);
 
   g_signal_connect(apply_button, "clicked", G_CALLBACK(on_install_button_click), theme_name);
+  g_signal_connect(controller, "enter", G_CALLBACK(on_image_mouseover), theme_name);
+  g_signal_connect(controller, "leave", G_CALLBACK(on_image_mouseout), theme_name);
 
   gtk_box_append( GTK_BOX(main_box), title);
   gtk_box_append( GTK_BOX(main_box), image);
@@ -73,7 +142,9 @@ GtkWidget* build_theme_frame(char* theme_name) {
 
 
 GtkWidget* fetch_all_themes() {
-  
+  currently_animated = malloc(1000 * sizeof(map_element));
+  map_init(currently_animated, 1000);
+
   GtkWidget* theme_grid = gtk_grid_new();
 
   DIR* theme_dir = opendir("/usr/share/plymouth-manager/themes");
