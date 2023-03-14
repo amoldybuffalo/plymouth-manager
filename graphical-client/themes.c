@@ -7,12 +7,18 @@
 #include "../common/map.h"
 #include "themes.h"
 
+#define ANIMATING_ON 1
+#define ANIMATING_PAUSED 0
+#define ANIMATING_OFF -1
+
+map_element* currently_animated;  
+
 struct gtk_data_storage {
   GtkWidget* widget;
   char theme_name[PATH_MAX];
 };
 
-map_element* currently_animated;  
+
 
 /* This is all done asynchronously so that the information can be updated live.*/
 void* on_install_button_click_async(void* data) {
@@ -77,21 +83,18 @@ void* animate_plymouth_theme_async(void* args) {
   
   sprintf(path, "/usr/share/plymouth-manager/themes/%s/progress-", theme_name);
   int highest_num = find_highest_file_number(path, 0, ".png");
-  for(int i = 0; i < highest_num; i++) {
-    
-    if(map_find(currently_animated, theme_name) == 1) {
+  for(int i = 0; i < (highest_num - 1); i++) {   
+    if(map_find(currently_animated, theme_name) == ANIMATING_ON) {
       sprintf(path, "/usr/share/plymouth-manager/themes/%s/progress-%i.png", theme_name, i);
-      g_print("Theme name is '%s'\n", theme_name);
-      g_print("Path is: %s\n", path);
-      
       gtk_image_set_from_pixbuf( GTK_IMAGE(image), get_pixbuf_standard_size(path));
 
     }  
-    sleep(0.5);
+    sleep(0.8);
   }
   sprintf(path, "/usr/share/plymouth-manager/themes/%s/progress-%i.png", theme_name, highest_num/4);
   gtk_image_set_from_pixbuf( GTK_IMAGE(image), get_pixbuf_standard_size(path));
-  map_modify(currently_animated, theme_name, 0);
+  map_modify(currently_animated, theme_name, ANIMATING_OFF);
+  pthread_exit(NULL);
 }
 
 static void on_image_mouseover(GtkEventController* controller, gpointer theme_name) {
@@ -101,21 +104,21 @@ static void on_image_mouseover(GtkEventController* controller, gpointer theme_na
   void* args = (void*) &data;
   pthread_t thread_id;
 
-  if(map_find(currently_animated, (char*) theme_name) == 0) {
-    map_modify(currently_animated, (char*) theme_name, 1);
+  if(map_find(currently_animated, (char*) theme_name) == ANIMATING_OFF) { 
+    printf("Starting thread with name %s\n", (char*) theme_name); 
     pthread_create(&thread_id, NULL, animate_plymouth_theme_async, args);
-  
   } 
+  map_modify(currently_animated, (char*) theme_name, ANIMATING_ON);
 }
 
 static void on_image_mouseout(GtkEventController* controller, gpointer theme_name) {
- map_modify(currently_animated, (char*) theme_name, 0);
+ map_modify(currently_animated, (char*) theme_name, ANIMATING_PAUSED);
 }
 
 
 
 GtkWidget* build_theme_frame(char* theme_name) {
-  map_add(currently_animated, theme_name, 0);
+  map_add(currently_animated, theme_name, ANIMATING_OFF);
   GtkWidget* main_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
   GtkWidget* image = get_optimal_theme_image(theme_name);
   GtkWidget* title = gtk_label_new(theme_name);
